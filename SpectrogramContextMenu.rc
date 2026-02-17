@@ -1,0 +1,4 @@
+#include "resource.h"
+
+// Иконка для контекстного меню
+IDI_SPECTROGRAM ICON "spectrogram.ico"

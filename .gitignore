@@ -1,0 +1,34 @@
+# Visual Studio / MSVC
+.vs/
+*.obj
+*.lib
+*.exp
+*.dll
+*.pdb
+*.ilk
+*.suo
+*.user
+*.[Rr]elease/
+*.[Dd]ebug/
+x64/
+Win32/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Build artifacts from file list
+SpectrogramContextMenu.dll
+SpectrogramContextMenu.exp
+SpectrogramContextMenu.lib
+SpectrogramContextMenu.obj
+Register.obj
+SpectrogramContextMenu.res
+
+# Other
+*.aps
+*.bak
+*.ncb
+*.sbr
