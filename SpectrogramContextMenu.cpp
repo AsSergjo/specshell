@@ -5,7 +5,7 @@
 #include <commctrl.h>
 
 static LONG g_cDllRef = 0;
-HINSTANCE g_hInst = NULL;  // Убрали static чтобы был доступен из других файлов
+HINSTANCE g_hInst = NULL; 
 
 // Поддерживаемые аудиоформаты
 static const wchar_t* g_audioExtensions[] = {
