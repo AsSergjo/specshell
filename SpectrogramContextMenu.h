@@ -10,8 +10,18 @@
 
 // GUID для нашего расширения
 // {B5E2A3D1-9C4F-4E7A-8B3D-1F2E3C4D5A6B}
-static const GUID CLSID_SpectrogramContextMenu = 
+static const GUID CLSID_SpectrogramContextMenu =
 { 0xb5e2a3d1, 0x9c4f, 0x4e7a, { 0x8b, 0x3d, 0x1f, 0x2e, 0x3c, 0x4d, 0x5a, 0x6b } };
+
+// Параметры генерации спектрограммы
+constexpr int SPECTROGRAM_WIDTH = 1280;
+constexpr int SPECTROGRAM_HEIGHT = 720;
+constexpr const wchar_t* SPECTROGRAM_COLOR = L"cool";
+constexpr const wchar_t* SPECTROGRAM_MODE = L"combined";
+constexpr const wchar_t* SPECTROGRAM_SCALE = L"log";
+constexpr const wchar_t* SPECTROGRAM_UNSHARP = L"7:7:1.5";
+constexpr DWORD FFMPEG_TIMEOUT = 30000;
+constexpr const wchar_t* SPECTROGRAM_FILENAME = L"spec.png";
 
 class SpectrogramContextMenu : public IShellExtInit, public IContextMenu
 {

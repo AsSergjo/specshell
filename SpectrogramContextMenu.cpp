@@ -181,11 +181,13 @@ STDMETHODIMP SpectrogramContextMenu::QueryContextMenu(HMENU hmenu, UINT indexMen
 
     if (InsertMenuItemW(hmenu, indexMenu, TRUE, &mii))
     {
+        DestroyIcon(hIcon);
         return MAKE_HRESULT(SEVERITY_SUCCESS, FACILITY_NULL, 1);
     }
 
     // Если не удалось добавить элемент с иконкой, пробуем без иконки
     DeleteObject(hbm);
+    DestroyIcon(hIcon);
     mii.fMask = MIIM_STRING | MIIM_ID | MIIM_STATE;
     mii.hbmpItem = NULL;
 
@@ -278,23 +280,29 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
     }
 
     std::wstring outputPath = GetTempPath();
-    
+
     // Удаляем старый файл, если существует
     DeleteFileW(outputPath.c_str());
 
     // Формируем командную строку для ffmpeg
-    std::wstring cmdLine = L"\"" + ffmpegPath + L"\" -i \"" + audioFile + 
-                          L"\" -lavfi \"showspectrumpic=s=1280x720:mode=combined:color=cool:scale=log,unsharp=7:7:1.5\" \"" + 
-                          outputPath + L"\"";
+    std::wstring cmdLine = L"\"" + ffmpegPath + L"\" -i \"" + audioFile +
+                          L"\" -lavfi \"showspectrumpic=s=" +
+                          std::to_wstring(SPECTROGRAM_WIDTH) + L"x" +
+                          std::to_wstring(SPECTROGRAM_HEIGHT) +
+                          L":mode=" + std::wstring(SPECTROGRAM_MODE) +
+                          L":color=" + std::wstring(SPECTROGRAM_COLOR) +
+                          L":scale=" + std::wstring(SPECTROGRAM_SCALE) +
+                          L",unsharp=" + std::wstring(SPECTROGRAM_UNSHARP) +
+                          L"\" \"" + outputPath + L"\"";
 
     // Запускаем ffmpeg
     STARTUPINFOW si = { sizeof(si) };
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
-    
+
     PROCESS_INFORMATION pi = { 0 };
 
-    if (CreateProcessW(NULL, 
+    if (CreateProcessW(NULL,
                       const_cast<LPWSTR>(cmdLine.c_str()),
                       NULL, NULL, FALSE,
                       CREATE_NO_WINDOW,
@@ -302,8 +310,8 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
                       &si, &pi))
     {
         // Ждем завершения процесса
-        WaitForSingleObject(pi.hProcess, 30000); // Таймаут 30 секунд
-        
+        WaitForSingleObject(pi.hProcess, FFMPEG_TIMEOUT);
+
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
 
@@ -331,8 +339,14 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
 
 void SpectrogramContextMenu::ShowImage(const std::wstring& imagePath)
 {
-    // Используем стандартный просмотрщик Windows
-    ShellExecuteW(NULL, L"open", imagePath.c_str(), NULL, NULL, SW_SHOW);
+    HINSTANCE result = ShellExecuteW(NULL, L"open", imagePath.c_str(), NULL, NULL, SW_SHOW);
+    if ((INT_PTR)result <= 32)
+    {
+        MessageBoxW(NULL,
+                   L"Не удалось открыть изображение. Попробуйте открыть файл вручную.",
+                   L"Ошибка",
+                   MB_OK | MB_ICONERROR);
+    }
 }
 
 // ClassFactory реализация
