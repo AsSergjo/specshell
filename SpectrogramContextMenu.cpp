@@ -3,6 +3,8 @@
 #include <strsafe.h>
 #include <shellapi.h>
 #include <commctrl.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
 
 static LONG g_cDllRef = 0;
 HINSTANCE g_hInst = NULL; 
@@ -267,6 +269,186 @@ bool SpectrogramContextMenu::FindFFmpeg(std::wstring& ffmpegPath)
     return false;
 }
 
+// Вспомогательная — получить CLSID энкодера по MIME
+static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
+{
+    using namespace Gdiplus;
+    UINT num = 0, size = 0;
+    GetImageEncodersSize(&num, &size);
+    if (size == 0) return -1;
+
+    ImageCodecInfo* pInfo = (ImageCodecInfo*)malloc(size);
+    if (!pInfo) return -1;
+
+    GetImageEncoders(num, size, pInfo);
+    for (UINT i = 0; i < num; i++) {
+        if (wcscmp(pInfo[i].MimeType, format) == 0) {
+            *pClsid = pInfo[i].Clsid;
+            free(pInfo);
+            return i;
+        }
+    }
+    free(pInfo);
+    return -1;
+}
+
+// Получить sample rate через ffprobe
+static double GetSampleRate(const std::wstring& audioFile, const std::wstring& ffmpegPath)
+{
+    // ffprobe живёт рядом с ffmpeg
+    std::wstring ffprobePath = ffmpegPath;
+    size_t pos = ffprobePath.rfind(L"ffmpeg.exe");
+    if (pos != std::wstring::npos)
+        ffprobePath.replace(pos, 10, L"ffprobe.exe");
+    else {
+
+        return 44100.0;
+    }
+
+    // Проверяем, существует ли ffprobe
+    if (!PathFileExistsW(ffprobePath.c_str())) {
+       
+        return 44100.0;
+    }
+
+    WCHAR tempFile[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempFile);
+    wcscat_s(tempFile, L"ffprobe_sr.txt");
+
+    
+    // CreateProcess не поддерживает редирект через > напрямую — используем cmd /c
+    std::wstring cmd = L"cmd /c \"\"" + ffprobePath + L"\" -v error -select_streams a:0 "
+        L"-show_entries stream=sample_rate -of csv=p=0 \"" + audioFile +
+        L"\" > \"" + tempFile + L"\"\"";
+  
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+
+    if (!CreateProcessW(NULL, const_cast<LPWSTR>(cmd.c_str()),
+        NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+    {
+        DWORD err = GetLastError();
+        wchar_t buf[64];
+        swprintf_s(buf, L"[SPEC] GetSampleRate: CreateProcess failed, err=%lu, fallback 44100", err);
+        
+        return 44100.0;
+    }
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    // Проверяем, создался ли файл с результатом
+    if (!PathFileExistsW(tempFile)) {
+        
+        return 44100.0;
+    }
+
+    double sr = 44100.0;
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, tempFile, L"r") == 0 && f) {
+        int ret = fscanf_s(f, "%lf", &sr);
+        fclose(f);
+        wchar_t buf[64];
+        swprintf_s(buf, L"[SPEC] GetSampleRate: fscanf ret=%d, sr=%.0f", ret, sr);
+        
+    } 
+    
+    DeleteFileW(tempFile);
+    return sr;
+}
+
+void DrawFreqLabels(const wchar_t* pngPath, double sr)
+{
+    using namespace Gdiplus;
+
+    GdiplusStartupInput gsi;
+    ULONG_PTR token;
+    GdiplusStartup(&token, &gsi, nullptr);
+
+    std::wstring tmpSave = std::wstring(pngPath) + L".tmp";
+    bool savedOk = false;
+
+    {
+        Bitmap bmp(pngPath);
+        if (bmp.GetLastStatus() != Ok) {
+            GdiplusShutdown(token);
+            return;
+        }
+
+        Graphics g(&bmp);
+        int w = (int)bmp.GetWidth();
+        int h = (int)bmp.GetHeight();
+
+        double f_max = sr / 2.0;
+
+        // Подбираем шаг: делим f_max на ~18, округляем до 1,2,5 * 10^n
+        double rawStep = f_max / 18.0;
+        double mag = pow(10.0, floor(log10(rawStep)));
+        double norm = rawStep / mag;
+        double niceStep;
+        if      (norm < 1.5) niceStep = 1.0 * mag;
+        else if (norm < 3.5) niceStep = 2.0 * mag;
+        else if (norm < 7.5) niceStep = 5.0 * mag;
+        else                 niceStep = 10.0 * mag;
+
+        Font font(L"Arial", 8);
+        SolidBrush brush(Color(220, 200, 200, 200));
+        Pen pen(Color(90, 180, 180, 180), 1);
+        pen.SetDashStyle(DashStyleDash);
+
+        // y = h * (1.0 - freq / f_max)
+        bool firstTick = true;
+        for (double f = niceStep; f < f_max; f += niceStep) {
+            int y = (int)round(h * (1.0 - f / f_max));
+            if (y < 0 || y >= h) continue;
+
+            g.DrawLine(&pen, 0, y, w, y);
+
+            wchar_t label[32];
+            if (firstTick) {
+                // первая (нижняя) метка - добавляем sr справа
+                wchar_t srStr[16];
+                if ((int)sr % 1000 == 0)
+                    swprintf_s(srStr, L"  SR %.0fkHz", sr / 1000.0);
+                else
+                    swprintf_s(srStr, L"  SR %.1fkHz", sr / 1000.0);
+
+                if (f >= 1000.0)
+                    swprintf_s(label, L"%.0fk  %s", f / 1000.0, srStr);
+                else
+                    swprintf_s(label, L"%.0f  %s", f, srStr);
+
+                firstTick = false;
+            } else {
+                if (f >= 1000.0)
+                    swprintf_s(label, L"%.0fk", f / 1000.0);
+                else
+                    swprintf_s(label, L"%.0f", f);
+            }
+         
+            // (считаем ширину по длине строки)
+            RectF bbox;
+            g.MeasureString(label, -1, &font, PointF(0, 0), &bbox);
+            SolidBrush bgBrush(Color(150, 0, 0, 0));
+            g.FillRectangle(&bgBrush, 2, y - 12, (int)bbox.Width + 4, 12);
+            g.DrawString(label, -1, &font, PointF(3, (float)(y - 13)), &brush);
+        }
+
+        CLSID clsid;
+        if (GetEncoderClsid(L"image/png", &clsid) >= 0)
+            savedOk = (bmp.Save(tmpSave.c_str(), &clsid) == Ok);
+    }
+
+    GdiplusShutdown(token);
+
+    if (savedOk)
+        MoveFileExW(tmpSave.c_str(), pngPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+}
+
 void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audioFile)
 {
     std::wstring ffmpegPath;
@@ -292,7 +474,7 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
                           L":mode=" + std::wstring(SPECTROGRAM_MODE) +
                           L":color=" + std::wstring(SPECTROGRAM_COLOR) +
                           L":scale=" + std::wstring(SPECTROGRAM_SCALE) +
-                          L",unsharp=" + std::wstring(SPECTROGRAM_UNSHARP) +
+                          L":legend=0,unsharp=" + std::wstring(SPECTROGRAM_UNSHARP) +
                           L"\" \"" + outputPath + L"\"";
 
     // Запускаем ffmpeg
@@ -317,7 +499,9 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
 
         // Проверяем, создался ли файл
         if (PathFileExistsW(outputPath.c_str()))
-        {
+        {   
+            double sr = GetSampleRate(audioFile, ffmpegPath);
+            DrawFreqLabels(outputPath.c_str(), sr);
             ShowImage(outputPath);
         }
         else

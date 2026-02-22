@@ -23,21 +23,21 @@
 ## Требования
 
 ### Для компиляции:
-- **Visual Studio 2019/2022** (рекомендуется) ИЛИ **MinGW-w64**
+- **Visual Studio 2019/2022** (рекомендуется)
 - Windows SDK
 - C++11 или выше
 
 ### Для работы:
 - Windows 10/11
 - FFmpeg.exe в PATH
-
+- FFprobe.exe в PATH
 ## Компиляция
 
 ### Вариант 1: Visual Studio (с `build.bat`)
 
 Этот способ является самым простым и рекомендованным.
 
-1. Откройте **Developer Command Prompt for VS 2022** (или VS 2019).
+1. Откройте **x64 Native Developer Command Prompt for VS 2022** (или VS 2019).
 2. Перейдите в папку с исходниками:
    ```
    cd путь\к\исходникам
