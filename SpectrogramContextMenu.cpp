@@ -293,34 +293,31 @@ static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 }
 
 // Получить sample rate через ffprobe
-static double GetSampleRate(const std::wstring& audioFile, const std::wstring& ffmpegPath)
+static bool GetAudioInfo(const std::wstring& audioFile, const std::wstring& ffmpegPath, double& sr, double& duration)
 {
-    // ffprobe живёт рядом с ffmpeg
+    sr = 44100.0;
+    duration = 0.0;
+
     std::wstring ffprobePath = ffmpegPath;
     size_t pos = ffprobePath.rfind(L"ffmpeg.exe");
     if (pos != std::wstring::npos)
         ffprobePath.replace(pos, 10, L"ffprobe.exe");
-    else {
+    else
+        return false;
 
-        return 44100.0;
-    }
-
-    // Проверяем, существует ли ffprobe
-    if (!PathFileExistsW(ffprobePath.c_str())) {
-       
-        return 44100.0;
-    }
+    if (!PathFileExistsW(ffprobePath.c_str()))
+        return false;
 
     WCHAR tempFile[MAX_PATH];
     GetTempPathW(MAX_PATH, tempFile);
-    wcscat_s(tempFile, L"ffprobe_sr.txt");
+    wcscat_s(tempFile, L"ffprobe_info.txt");
 
-    
-    // CreateProcess не поддерживает редирект через > напрямую — используем cmd /c
-    std::wstring cmd = L"cmd /c \"\"" + ffprobePath + L"\" -v error -select_streams a:0 "
-        L"-show_entries stream=sample_rate -of csv=p=0 \"" + audioFile +
-        L"\" > \"" + tempFile + L"\"\"";
-  
+    // stream и format entries через двоеточие в одном -show_entries.
+    // ffprobe с csv=p=0 выводит сначала sr (stream), потом duration (format),
+    std::wstring cmd = L"cmd /c \"\"" + ffprobePath + 
+        L"\" -v error -show_entries stream=sample_rate:format=duration "
+        L"-of csv=p=0 \"" + audioFile + L"\" > \"" + tempFile + L"\"\"";
+
     STARTUPINFOW si = { sizeof(si) };
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
@@ -329,39 +326,37 @@ static double GetSampleRate(const std::wstring& audioFile, const std::wstring& f
     if (!CreateProcessW(NULL, const_cast<LPWSTR>(cmd.c_str()),
         NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
     {
-        DWORD err = GetLastError();
-        wchar_t buf[64];
-        swprintf_s(buf, L"[SPEC] GetSampleRate: CreateProcess failed, err=%lu, fallback 44100", err);
-        
-        return 44100.0;
+        return false;
     }
 
     WaitForSingleObject(pi.hProcess, 5000);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    // Проверяем, создался ли файл с результатом
-    if (!PathFileExistsW(tempFile)) {
-        
-        return 44100.0;
-    }
-
-    double sr = 44100.0;
+    if (!PathFileExistsW(tempFile))
+        return false;
 
     FILE* f = nullptr;
     if (_wfopen_s(&f, tempFile, L"r") == 0 && f) {
-        int ret = fscanf_s(f, "%lf", &sr);
+        char line[256];
+        int lineNum = 0;
+        while (fgets(line, sizeof(line), f)) {
+            // Пропускаем пустые строки
+            char* p = line;
+            while (*p == ' ' || *p == '\r' || *p == '\n' || *p == '\t') p++;
+            if (*p == '\0') continue;
+
+            if (lineNum == 0) sscanf_s(p, "%lf", &sr);
+            else if (lineNum == 1) sscanf_s(p, "%lf", &duration);
+            lineNum++;
+        }
         fclose(f);
-        wchar_t buf[64];
-        swprintf_s(buf, L"[SPEC] GetSampleRate: fscanf ret=%d, sr=%.0f", ret, sr);
-        
-    } 
-    
+    }
     DeleteFileW(tempFile);
-    return sr;
+    return true;
 }
 
-void DrawFreqLabels(const wchar_t* pngPath, double sr)
+void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
 {
     using namespace Gdiplus;
 
@@ -397,20 +392,22 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr)
 
         Font font(L"Arial", 8);
         SolidBrush brush(Color(220, 200, 200, 200));
+        SolidBrush bgBrush(Color(150, 0, 0, 0));
         Pen pen(Color(90, 180, 180, 180), 1);
         pen.SetDashStyle(DashStyleDash);
 
-        // y = h * (1.0 - freq / f_max)
-        bool firstTick = true;
-        for (double f = niceStep; f < f_max; f += niceStep) {
+        // Считаем количество тиков заранее
+        int tickCount = (int)floor((f_max - 1.0) / niceStep); // последний индекс = tickCount
+        for (int i = 1; i <= tickCount; i++) {
+            double f = niceStep * i;
             int y = (int)round(h * (1.0 - f / f_max));
             if (y < 0 || y >= h) continue;
 
             g.DrawLine(&pen, 0, y, w, y);
 
             wchar_t label[32];
-            if (firstTick) {
-                // первая (нижняя) метка - добавляем sr справа
+            if (i == ( tickCount - 1)) {
+                // верхний тик- добавляем SR
                 wchar_t srStr[16];
                 if ((int)sr % 1000 == 0)
                     swprintf_s(srStr, L"  SR %.0fkHz", sr / 1000.0);
@@ -418,24 +415,47 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr)
                     swprintf_s(srStr, L"  SR %.1fkHz", sr / 1000.0);
 
                 if (f >= 1000.0)
-                    swprintf_s(label, L"%.0fk  %s", f / 1000.0, srStr);
+                    swprintf_s(label, L"%.0fk%s", f / 1000.0, srStr);
                 else
-                    swprintf_s(label, L"%.0f  %s", f, srStr);
-
-                firstTick = false;
+                    swprintf_s(label, L"%.0f%s", f, srStr);
             } else {
                 if (f >= 1000.0)
                     swprintf_s(label, L"%.0fk", f / 1000.0);
                 else
                     swprintf_s(label, L"%.0f", f);
             }
-         
-            // (считаем ширину по длине строки)
+
             RectF bbox;
             g.MeasureString(label, -1, &font, PointF(0, 0), &bbox);
-            SolidBrush bgBrush(Color(150, 0, 0, 0));
             g.FillRectangle(&bgBrush, 2, y - 12, (int)bbox.Width + 4, 12);
             g.DrawString(label, -1, &font, PointF(3, (float)(y - 13)), &brush);
+        }
+
+       if (duration > 0.0) {
+            int divisions = 16;
+            double timeStep = duration / divisions;
+
+            for (int i = 0; i <= divisions; i++) {
+                double t = i * timeStep;
+                int x = (int)round((double)w * i / divisions);
+                if (x < 0 || x > w) continue;
+
+                g.DrawLine(&pen, x, 0, x, h - 15);
+
+                wchar_t label[32];
+                int min = (int)(t / 60.0);
+                int sec = (int)(t) % 60;
+                swprintf_s(label, L"%d:%02d", min, sec);
+
+                RectF bbox;
+                g.MeasureString(label, -1, &font, PointF(0, 0), &bbox);
+                int labelX = (i == 0) ? x : x - (int)bbox.Width / 2;
+                if (labelX < 0) labelX = 0;
+                if (labelX + (int)bbox.Width > w) labelX = w - (int)bbox.Width;
+
+                g.FillRectangle(&bgBrush, labelX, h - 14, (int)bbox.Width + 4, 12);
+                g.DrawString(label, -1, &font, PointF((float)(labelX + 2), (float)(h - 13)), &brush);
+            }
         }
 
         CLSID clsid;
@@ -497,11 +517,11 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
 
-        // Проверяем, создался ли файл
         if (PathFileExistsW(outputPath.c_str()))
         {   
-            double sr = GetSampleRate(audioFile, ffmpegPath);
-            DrawFreqLabels(outputPath.c_str(), sr);
+            double sr, duration;
+            GetAudioInfo(audioFile, ffmpegPath, sr, duration);
+            DrawFreqLabels(outputPath.c_str(), sr, duration);
             ShowImage(outputPath);
         }
         else
