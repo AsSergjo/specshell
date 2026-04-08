@@ -16,12 +16,29 @@ static const GUID CLSID_SpectrogramContextMenu =
 // Параметры генерации спектрограммы
 constexpr int SPECTROGRAM_WIDTH = 1280;
 constexpr int SPECTROGRAM_HEIGHT = 720;
-constexpr const wchar_t* SPECTROGRAM_COLOR = L"cool";
+constexpr const wchar_t* SPECTROGRAM_COLOR = L"intensity";
 constexpr const wchar_t* SPECTROGRAM_MODE = L"combined";
 constexpr const wchar_t* SPECTROGRAM_SCALE = L"log";
-constexpr const wchar_t* SPECTROGRAM_UNSHARP = L"7:7:1.5";
+constexpr const wchar_t* SPECTROGRAM_UNSHARP = L"5:5:0.8:5:5:0.0";
 constexpr DWORD FFMPEG_TIMEOUT = 30000;
 constexpr const wchar_t* SPECTROGRAM_FILENAME = L"spec.png";
+
+/*// Размер — широкоформатный, как в spek
+const int    SPECTROGRAM_WIDTH    = 1500;
+const int    SPECTROGRAM_HEIGHT   = 512;
+
+// mode=combined — каналы смешиваются в один
+const wchar_t* SPECTROGRAM_MODE   = L"combined";
+
+// intensity: чёрный→синий→фиолетовый→красный→жёлтый→белый
+// Точно соответствует цветовой гамме на изображении
+const wchar_t* SPECTROGRAM_COLOR  = L"intensity";
+
+// log — логарифмическая шкала амплитуды (dB), частотная ось линейная
+const wchar_t* SPECTROGRAM_SCALE  лог= L"log";
+
+// Лёгкое повышение резкости, не искажает картину
+const wchar_t* SPECTROGRAM_UNSHARP = L"5:5:0.8:5:5:0.0";*/
 
 class SpectrogramContextMenu : public IShellExtInit, public IContextMenu
 {

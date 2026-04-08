@@ -269,7 +269,7 @@ bool SpectrogramContextMenu::FindFFmpeg(std::wstring& ffmpegPath)
     return false;
 }
 
-// Вспомогательная — получить CLSID энкодера по MIME
+// Вспомогательная - получить CLSID энкодера по MIME
 static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 {
     using namespace Gdiplus;
@@ -365,22 +365,47 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
     GdiplusStartup(&token, &gsi, nullptr);
 
     std::wstring tmpSave = std::wstring(pngPath) + L".tmp";
+    DeleteFileW(tmpSave.c_str());
     bool savedOk = false;
 
     {
-        Bitmap bmp(pngPath);
-        if (bmp.GetLastStatus() != Ok) {
+        // Загружаем оригинальную спектрограмму
+        Bitmap src(pngPath);
+        if (src.GetLastStatus() != Gdiplus::Ok) {
             GdiplusShutdown(token);
             return;
         }
 
+        int srcW = (int)src.GetWidth();
+        int srcH = (int)src.GetHeight();
+
+        // Поля вокруг спектрограммы (в пикселях)
+        const int LEFT   = 54;  // для меток частот (ось Y)
+        const int RIGHT  = 6;
+        const int TOP    = 6;
+        const int BOTTOM = 22;  // для меток времени (ось X)
+
+        int totalW = LEFT + srcW + RIGHT;
+        int totalH = TOP  + srcH + BOTTOM;
+
+        // Новый bitmap - спектрограмма + поля
+        Bitmap bmp(totalW, totalH, PixelFormat32bppARGB);
         Graphics g(&bmp);
-        int w = (int)bmp.GetWidth();
-        int h = (int)bmp.GetHeight();
+        g.SetSmoothingMode(SmoothingModeNone);
+        g.SetTextRenderingHint(TextRenderingHintSingleBitPerPixelGridFit);
 
+        // Фон - чёрный
+        g.Clear(Color(255, 0, 0, 0));
+
+        // Вписываем оригинальную спектрограмму в центральную область
+        g.DrawImage(&src, LEFT, TOP, srcW, srcH);
+
+        // Тонкая рамка вокруг спектрограммы (1 px, серая)
+        Pen borderPen(Color(255, 100, 100, 100), 1.0f);
+        g.DrawRectangle(&borderPen, LEFT, TOP, srcW - 1, srcH - 1);
+
+        // Параметры осей
         double f_max = sr / 2.0;
-
-        // Подбираем шаг: делим f_max на ~18, округляем до 1,2,5 * 10^n
         double rawStep = f_max / 18.0;
         double mag = pow(10.0, floor(log10(rawStep)));
         double norm = rawStep / mag;
@@ -390,57 +415,63 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
         else if (norm < 7.5) niceStep = 5.0 * mag;
         else                 niceStep = 10.0 * mag;
 
-        Font font(L"Arial", 8);
-        SolidBrush brush(Color(220, 200, 200, 200));
-        SolidBrush bgBrush(Color(150, 0, 0, 0));
-        Pen pen(Color(90, 180, 180, 180), 1);
-        pen.SetDashStyle(DashStyleDash);
+        Font      font(L"Arial", 8);
+        SolidBrush brush(Color(255, 200, 200, 200));
+        Pen       tickPen(Color(255, 130, 130, 130), 1.0f);
 
-        // Считаем количество тиков заранее
-        int tickCount = (int)floor((f_max - 1.0) / niceStep); // последний индекс = tickCount
+        int tickCount = (int)floor((f_max - 1.0) / niceStep);
+
+        // Ось Y: метки частот слева от спектрограммы 
+
+        // Нижний тик (y = TOP + srcH) - подпись SR, начало шкалы (0 Гц)
+        {
+            wchar_t srLabel[32];
+            if ((int)sr % 1000 == 0)
+                swprintf_s(srLabel, L"SR %.0fk", sr / 1000.0);
+            else
+                swprintf_s(srLabel, L"SR %.1fk", sr / 1000.0);
+ 
+            RectF bbox;
+            g.MeasureString(srLabel, -1, &font, PointF(0, 0), &bbox);
+            float labelY = (float)(TOP + srcH) - bbox.Height * 0.5f;
+            //g.DrawString(srLabel, -1, &font, PointF(4.0f, labelY), &brush);
+        }
+
+        // Остальные тики - только числовые метки частот
         for (int i = 1; i <= tickCount; i++) {
             double f = niceStep * i;
-            int y = (int)round(h * (1.0 - f / f_max));
-            if (y < 0 || y >= h) continue;
+            int y = TOP + (int)round(srcH * (1.0 - f / f_max));
+            if (y < TOP || y > TOP + srcH) continue;
 
-            g.DrawLine(&pen, 0, y, w, y);
+            // Тик-штрих на левой границе (4 px наружу)
+            g.DrawLine(&tickPen, LEFT - 4, y, LEFT, y);
 
             wchar_t label[32];
-            if (i == ( tickCount - 1)) {
-                // верхний тик- добавляем SR
-                wchar_t srStr[16];
-                if ((int)sr % 1000 == 0)
-                    swprintf_s(srStr, L"  SR %.0fkHz", sr / 1000.0);
-                else
-                    swprintf_s(srStr, L"  SR %.1fkHz", sr / 1000.0);
-
-                if (f >= 1000.0)
-                    swprintf_s(label, L"%.0fk%s", f / 1000.0, srStr);
-                else
-                    swprintf_s(label, L"%.0f%s", f, srStr);
-            } else {
-                if (f >= 1000.0)
-                    swprintf_s(label, L"%.0fk", f / 1000.0);
-                else
-                    swprintf_s(label, L"%.0f", f);
-            }
+            if (f >= 1000.0)
+                swprintf_s(label, L"%.0fk", f / 1000.0);
+            else
+                swprintf_s(label, L"%.0f", f);
 
             RectF bbox;
             g.MeasureString(label, -1, &font, PointF(0, 0), &bbox);
-            g.FillRectangle(&bgBrush, 2, y - 12, (int)bbox.Width + 4, 12);
-            g.DrawString(label, -1, &font, PointF(3, (float)(y - 13)), &brush);
+
+            float labelX = 24.0f; //смещение по оси х
+            float labelY = (float)y - bbox.Height * 0.5f;
+            g.DrawString(label, -1, &font, PointF(labelX, labelY), &brush);
         }
 
-       if (duration > 0.0) {
-            int divisions = 16;
+        // Ось X: метки времени снизу от спектрограммы
+        if (duration > 0.0) {
+            const int divisions = 16;
             double timeStep = duration / divisions;
 
             for (int i = 0; i <= divisions; i++) {
                 double t = i * timeStep;
-                int x = (int)round((double)w * i / divisions);
-                if (x < 0 || x > w) continue;
+                int x = LEFT + (int)round((double)srcW * i / divisions);
+                if (x < LEFT || x > LEFT + srcW) continue;
 
-                g.DrawLine(&pen, x, 0, x, h - 15);
+                // Тик-штрих на нижней границе (4 px вниз)
+                g.DrawLine(&tickPen, x, TOP + srcH, x, TOP + srcH + 4);
 
                 wchar_t label[32];
                 int min = (int)(t / 60.0);
@@ -449,24 +480,34 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
 
                 RectF bbox;
                 g.MeasureString(label, -1, &font, PointF(0, 0), &bbox);
-                int labelX = (i == 0) ? x : x - (int)bbox.Width / 2;
-                if (labelX < 0) labelX = 0;
-                if (labelX + (int)bbox.Width > w) labelX = w - (int)bbox.Width;
 
-                g.FillRectangle(&bgBrush, labelX, h - 14, (int)bbox.Width + 4, 12);
-                g.DrawString(label, -1, &font, PointF((float)(labelX + 2), (float)(h - 13)), &brush);
+                // По центру тика, с ограничением по краям
+                float labelX = (float)x - bbox.Width * 0.5f;
+                if (labelX < 0.0f) labelX = 0.0f;
+                if (labelX + bbox.Width > (float)totalW)
+                    labelX = (float)totalW - bbox.Width;
+
+                float labelY = (float)(TOP + srcH + 6);
+                g.DrawString(label, -1, &font, PointF(labelX, labelY), &brush);
             }
         }
 
         CLSID clsid;
         if (GetEncoderClsid(L"image/png", &clsid) >= 0)
-            savedOk = (bmp.Save(tmpSave.c_str(), &clsid) == Ok);
+            savedOk = (bmp.Save(tmpSave.c_str(), &clsid) == Gdiplus::Ok);
     }
 
     GdiplusShutdown(token);
 
     if (savedOk)
-        MoveFileExW(tmpSave.c_str(), pngPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    {
+        if (!MoveFileExW(tmpSave.c_str(), pngPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            DeleteFileW(tmpSave.c_str());
+    }
+    else
+    {
+        DeleteFileW(tmpSave.c_str());
+    }
 }
 
 void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audioFile)

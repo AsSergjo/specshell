@@ -16,7 +16,7 @@ cmake --build build --config Release
 
 REM Сообщение об успехе
 if %ERRORLEVEL% EQU 0 (
-    echo OK: build\Release\loader.exe
+    echo OK: build\Release\
 ) else (
     echo ERROR: %ERRORLEVEL%
 )

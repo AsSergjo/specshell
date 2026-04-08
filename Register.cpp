@@ -57,12 +57,7 @@ HRESULT RegisterServer()
         MessageBoxW(NULL, L"Failed to get module filename", L"Error", MB_OK | MB_ICONERROR);
         return HRESULT_FROM_WIN32(GetLastError());
     }
-
-    // Показываем путь к DLL для отладки
-    WCHAR szDebug[512];
-    StringCchPrintfW(szDebug, ARRAYSIZE(szDebug), L"Registering DLL:\n%s", szModule);
-    MessageBoxW(NULL, szDebug, L"Debug Info", MB_OK | MB_ICONINFORMATION);
-
+   
     // Конвертируем CLSID в строку
     StringFromGUID2(CLSID_SpectrogramContextMenu, szCLSID, ARRAYSIZE(szCLSID));
 
@@ -104,9 +99,7 @@ HRESULT RegisterServer()
         
         if (FAILED(hr))
         {
-            StringCchPrintfW(szDebug, ARRAYSIZE(szDebug), 
-                L"Failed to register extension: %s", extensions[i]);
-            MessageBoxW(NULL, szDebug, L"Warning", MB_OK | MB_ICONWARNING);
+            
         }
         
         // Также регистрируем для ProgID (если есть)
