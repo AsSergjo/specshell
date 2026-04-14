@@ -4,6 +4,8 @@
 #include <shellapi.h>
 #include <commctrl.h>
 #include <gdiplus.h>
+#include <cstdlib>
+#include <vector>
 #pragma comment(lib, "gdiplus.lib")
 
 static LONG g_cDllRef = 0;
@@ -292,11 +294,77 @@ static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
     return -1;
 }
 
-// Получить sample rate через ffprobe
-static bool GetAudioInfo(const std::wstring& audioFile, const std::wstring& ffmpegPath, double& sr, double& duration)
+static void TrimAscii(std::string& s)
 {
-    sr = 44100.0;
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t'))
+        ++start;
+
+    size_t end = s.size();
+    while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t'))
+        --end;
+
+    s = s.substr(start, end - start);
+}
+
+static bool TryParseDouble(const std::string& s, double& value)
+{
+    char* end = nullptr;
+    value = std::strtod(s.c_str(), &end);
+    if (end == s.c_str())
+        return false;
+
+    while (*end == ' ' || *end == '\t')
+        ++end;
+
+    return *end == '\0';
+}
+
+static bool TryParseInt(const std::string& s, int& value)
+{
+    char* end = nullptr;
+    long parsed = std::strtol(s.c_str(), &end, 10);
+    if (end == s.c_str())
+        return false;
+
+    while (*end == ' ' || *end == '\t')
+        ++end;
+
+    if (*end != '\0')
+        return false;
+
+    value = (int)parsed;
+    return true;
+}
+
+// Вспомогательная: char* -> wstring (UTF-8 / ANSI)
+static std::wstring MBtoWS(const std::string& s)
+{
+    if (s.empty()) return L"";
+
+    UINT codePage = CP_UTF8;
+    int n = MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS, s.c_str(), -1, nullptr, 0);
+    if (n <= 0) {
+        codePage = CP_ACP;
+        n = MultiByteToWideChar(codePage, 0, s.c_str(), -1, nullptr, 0);
+    }
+    if (n <= 0) return L"";
+
+    std::vector<wchar_t> buf(n);
+    MultiByteToWideChar(codePage, 0, s.c_str(), -1, buf.data(), n);
+    return buf.data();
+}
+
+// Получить sample rate, duration, codec, bitrate, format через ffprobe
+static bool GetAudioInfo(const std::wstring& audioFile, const std::wstring& ffmpegPath,
+    double& sr, double& duration,
+    std::wstring& codec, int& bitrate, std::wstring& format)
+{
+    sr       = 44100.0;
     duration = 0.0;
+    codec    = L"";
+    bitrate  = 0;
+    format   = L"";
 
     std::wstring ffprobePath = ffmpegPath;
     size_t pos = ffprobePath.rfind(L"ffmpeg.exe");
@@ -308,55 +376,121 @@ static bool GetAudioInfo(const std::wstring& audioFile, const std::wstring& ffmp
     if (!PathFileExistsW(ffprobePath.c_str()))
         return false;
 
-    WCHAR tempFile[MAX_PATH];
-    GetTempPathW(MAX_PATH, tempFile);
-    wcscat_s(tempFile, L"ffprobe_info.txt");
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
 
-    // stream и format entries через двоеточие в одном -show_entries.
-    // ffprobe с csv=p=0 выводит сначала sr (stream), потом duration (format),
-    std::wstring cmd = L"cmd /c \"\"" + ffprobePath + 
-        L"\" -v error -show_entries stream=sample_rate:format=duration "
-        L"-of csv=p=0 \"" + audioFile + L"\" > \"" + tempFile + L"\"\"";
+    HANDLE hRead = NULL;
+    HANDLE hWrite = NULL;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0))
+        return false;
+
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE hNull = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hNull == INVALID_HANDLE_VALUE) {
+        CloseHandle(hRead);
+        CloseHandle(hWrite);
+        return false;
+    }
+
+    // Именованный вывод без section wrappers:
+    //   sample_rate=48000
+    //   codec_name=mp3
+    //   duration=215.420000
+    //   bit_rate=320000
+    //   format_name=mp3,mpegaudio
+    std::wstring cmd = L"\"" + ffprobePath +
+        L"\" -v error -select_streams a:0"
+        L" -show_entries stream=sample_rate,codec_name:format=duration,bit_rate,format_name"
+        L" -of default=noprint_wrappers=1 \"" + audioFile + L"\"";
 
     STARTUPINFOW si = { sizeof(si) };
-    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {};
+    si.hStdOutput = hWrite;
+    si.hStdError = hNull;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
-    if (!CreateProcessW(NULL, const_cast<LPWSTR>(cmd.c_str()),
-        NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
-    {
+    PROCESS_INFORMATION pi = {};
+    BOOL ok = CreateProcessW(NULL, const_cast<LPWSTR>(cmd.c_str()),
+        NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+
+    CloseHandle(hWrite);
+    CloseHandle(hNull);
+
+    if (!ok) {
+        CloseHandle(hRead);
         return false;
+    }
+
+    std::string output;
+    char buffer[512];
+    for (;;) {
+        DWORD bytesRead = 0;
+        BOOL readOk = ReadFile(hRead, buffer, sizeof(buffer), &bytesRead, NULL);
+        if (!readOk || bytesRead == 0)
+            break;
+        output.append(buffer, bytesRead);
     }
 
     WaitForSingleObject(pi.hProcess, 5000);
+    CloseHandle(hRead);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    if (!PathFileExistsW(tempFile))
-        return false;
+    size_t start = 0;
+    while (start <= output.size()) {
+        size_t end = output.find('\n', start);
+        std::string line = (end == std::string::npos)
+            ? output.substr(start)
+            : output.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        TrimAscii(line);
+        if (!line.empty()) {
+            size_t sep = line.find('=');
+            if (sep != std::string::npos) {
+                std::string key = line.substr(0, sep);
+                std::string value = line.substr(sep + 1);
+                TrimAscii(key);
+                TrimAscii(value);
 
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, tempFile, L"r") == 0 && f) {
-        char line[256];
-        int lineNum = 0;
-        while (fgets(line, sizeof(line), f)) {
-            // Пропускаем пустые строки
-            char* p = line;
-            while (*p == ' ' || *p == '\r' || *p == '\n' || *p == '\t') p++;
-            if (*p == '\0') continue;
-
-            if (lineNum == 0) sscanf_s(p, "%lf", &sr);
-            else if (lineNum == 1) sscanf_s(p, "%lf", &duration);
-            lineNum++;
+                if (key == "sample_rate") {
+                    double parsedSr = 0.0;
+                    if (TryParseDouble(value, parsedSr) && parsedSr > 0.0)
+                        sr = parsedSr;
+                }
+                else if (key == "codec_name") {
+                    codec = MBtoWS(value);
+                }
+                else if (key == "duration") {
+                    double parsedDuration = 0.0;
+                    if (TryParseDouble(value, parsedDuration) && parsedDuration >= 0.0)
+                        duration = parsedDuration;
+                }
+                else if (key == "bit_rate") {
+                    int parsedBitrate = 0;
+                    if (TryParseInt(value, parsedBitrate) && parsedBitrate > 0)
+                        bitrate = parsedBitrate;
+                }
+                else if (key == "format_name") {
+                    format = MBtoWS(value);
+                }
+            }
         }
-        fclose(f);
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
     }
-    DeleteFileW(tempFile);
+
     return true;
 }
 
-void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
+void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration,
+    const std::wstring& codec, int bitrate, const std::wstring& format,
+    const std::wstring& filename)
 {
     using namespace Gdiplus;
 
@@ -379,11 +513,17 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
         int srcW = (int)src.GetWidth();
         int srcH = (int)src.GetHeight();
 
+        if (sr <= 1000.0)
+            sr = 44100.0;
+        if (duration < 0.0)
+            duration = 0.0;
+
         // Поля вокруг спектрограммы (в пикселях)
-        const int LEFT   = 54;  // для меток частот (ось Y)
-        const int RIGHT  = 6;
-        const int TOP    = 6;
-        const int BOTTOM = 22;  // для меток времени (ось X)
+        const int LEFT      = 54;  // для меток частот (ось Y)
+        const int RIGHT     = 6;
+        const int INFO_H    = 22;  // высота поля с информацией над спектрограммой
+        const int TOP       = INFO_H + 6; // = 28
+        const int BOTTOM    = 22;  // для меток времени (ось X)
 
         int totalW = LEFT + srcW + RIGHT;
         int totalH = TOP  + srcH + BOTTOM;
@@ -404,6 +544,50 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
         Pen borderPen(Color(255, 100, 100, 100), 1.0f);
         g.DrawRectangle(&borderPen, LEFT, TOP, srcW - 1, srcH - 1);
 
+        // ── Информационное поле над спектрограммой ──────────────────────────
+        {
+            // Формируем строку: SR xx.xk  |  xxx kbps  |  format  |  codec  |  filename
+            wchar_t srPart[32];
+            if ((int)sr % 1000 == 0)
+                swprintf_s(srPart, L"SR %.0fk", sr / 1000.0);
+            else
+                swprintf_s(srPart, L"SR %.1fk", sr / 1000.0);
+
+            wchar_t brPart[32];
+            if (bitrate > 0)
+                swprintf_s(brPart, L"%d kbps", bitrate / 1000);
+            else
+                wcscpy_s(brPart, L"? kbps");
+
+            // format_name может быть составным ("mp3,mpegaudio") — берём первый токен
+            std::wstring fmtShort = format;
+            size_t comma = fmtShort.find(L',');
+            if (comma != std::wstring::npos) fmtShort = fmtShort.substr(0, comma);
+
+            wchar_t infoLine[512];
+            swprintf_s(infoLine,
+                L"%s  |  %s  |  %s  |  %s  |  %s",
+                srPart,
+                brPart,
+                fmtShort.empty()  ? L"?" : fmtShort.c_str(),
+                codec.empty()     ? L"?" : codec.c_str(),
+                filename.empty()  ? L"?" : filename.c_str());
+
+            Font      infoFont(L"Arial", 9, FontStyleRegular);
+            SolidBrush infoBrush(Color(255, 220, 220, 220));
+
+            // Визуально центрируем текст во всей верхней зоне до спектрограммы (TOP = INFO_H + 6)
+            RectF bbox;
+            g.MeasureString(infoLine, -1, &infoFont, PointF(0, 0), &bbox);
+            float textY = ((float)TOP - bbox.Height) * 0.5f;
+            if (textY < 1.0f) textY = 1.0f;
+
+            // Отступ слева совпадает с LEFT (под метками оси Y)
+            g.DrawString(infoLine, -1, &infoFont,
+                         PointF((float)LEFT, textY), &infoBrush);
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         // Параметры осей
         double f_max = sr / 2.0;
         double rawStep = f_max / 18.0;
@@ -422,22 +606,7 @@ void DrawFreqLabels(const wchar_t* pngPath, double sr, double duration)
         int tickCount = (int)floor((f_max - 1.0) / niceStep);
 
         // Ось Y: метки частот слева от спектрограммы 
-
-        // Нижний тик (y = TOP + srcH) - подпись SR, начало шкалы (0 Гц)
-        {
-            wchar_t srLabel[32];
-            if ((int)sr % 1000 == 0)
-                swprintf_s(srLabel, L"SR %.0fk", sr / 1000.0);
-            else
-                swprintf_s(srLabel, L"SR %.1fk", sr / 1000.0);
- 
-            RectF bbox;
-            g.MeasureString(srLabel, -1, &font, PointF(0, 0), &bbox);
-            float labelY = (float)(TOP + srcH) - bbox.Height * 0.5f;
-            //g.DrawString(srLabel, -1, &font, PointF(4.0f, labelY), &brush);
-        }
-
-        // Остальные тики - только числовые метки частот
+        // тики - только числовые метки частот
         for (int i = 1; i <= tickCount; i++) {
             double f = niceStep * i;
             int y = TOP + (int)round(srcH * (1.0 - f / f_max));
@@ -561,8 +730,15 @@ void SpectrogramContextMenu::GenerateAndShowSpectrogram(const std::wstring& audi
         if (PathFileExistsW(outputPath.c_str()))
         {   
             double sr, duration;
-            GetAudioInfo(audioFile, ffmpegPath, sr, duration);
-            DrawFreqLabels(outputPath.c_str(), sr, duration);
+            std::wstring codec, format;
+            int bitrate = 0;
+            GetAudioInfo(audioFile, ffmpegPath, sr, duration, codec, bitrate, format);
+
+            // Только имя файла (без пути)
+            const wchar_t* fname = PathFindFileNameW(audioFile.c_str());
+            std::wstring filename = fname ? fname : audioFile;
+
+            DrawFreqLabels(outputPath.c_str(), sr, duration, codec, bitrate, format, filename);
             ShowImage(outputPath);
         }
         else
