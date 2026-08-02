@@ -33,3 +33,6 @@ SpectrogramContextMenu.res
 *.ncb
 *.sbr
 /build
+/build_*/
+/*.exe
+/*.res

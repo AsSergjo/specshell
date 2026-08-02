@@ -1,187 +1,98 @@
-# Spectrogram Context Menu - Shell Extension для Windows
+# Spectrogram Context Menu
 
-Расширение контекстного меню Windows 11/10, которое добавляет пункт "Показать спектрограмму" для аудиофайлов.
+A lightweight Windows 10/11 utility that adds **Show spectrogram** to the
+context menu of audio files. It generates a detailed PNG spectrogram with
+FFmpeg, adds frequency and time axes, audio metadata, and opens the result in
+your default image viewer.
 
-## Возможности
+![Generated spectrogram](image_result.jpg)
 
-- ✅ Интеграция в контекстное меню Проводника Windows
-- ✅ Автоматическая генерация спектрограммы с помощью FFmpeg
-- ✅ Использование стандартного просмотрщика изображений Windows
-- ✅ Поддержка множества аудиоформатов
-- ✅ Чистый WinAPI без внешних библиотек
-- ✅ Создание изображения во временной папке системы
+[Russian installation guide](INSTALL_GUIDE_RU.md)
 
-## Скриншот
+## Highlights
 
-![Скриншот работы расширения](image_result.jpg)
+- A single self-installing `SpectrogramContextMenu.exe` distribution file.
+- Per-user installation without administrator privileges or `regsvr32`.
+- MP3, FLAC, WAV, OGG, M4A, AAC, WMA, OPUS, APE, and AC3 support.
+- 1280 x 720 logarithmic intensity spectrograms.
+- Sample rate, bitrate, format, codec, filename, frequency, and time labels.
+- Install, update, repair, and uninstall modes in the same executable.
+- FFmpeg is discovered through `PATH` and is never bundled or downloaded.
 
-## Поддерживаемые форматы
+## Requirements
 
-- MP3, FLAC, WAV, OGG, M4A
-- AAC, WMA, OPUS, APE, AC3
+- Windows 10 or Windows 11 x64.
+- `ffmpeg.exe` and `ffprobe.exe` available through `PATH`.
 
-## Требования
+Verify FFmpeg in a new Command Prompt:
 
-### Для компиляции:
-- **Visual Studio 2019/2022** (рекомендуется)
-- Windows SDK
-- C++11 или выше
-
-### Для работы:
-- Windows 10/11
-- FFmpeg.exe в PATH
-- FFprobe.exe в PATH
-## Компиляция
-
-### Вариант 1: Visual Studio (с `build.bat`)
-
-Этот способ является самым простым и рекомендованным.
-
-1. Откройте **x64 Native Developer Command Prompt for VS 2022** (или VS 2019).
-2. Перейдите в папку с исходниками:
-   ```
-   cd путь\к\исходникам
-   ```
-3. Запустите компиляцию:
-   ```
-   build.bat
-   ```
-   DLL-файл (`SpectrogramContextMenu.dll`) будет создан в корневой папке проекта.
-
-### Вариант 2: CMake
-
-Этот способ предоставляет больше гибкости и позволяет использовать разные IDE и компиляторы.
-
-1. Убедитесь, что у вас установлен CMake.
-2. Создайте папку для сборки и перейдите в нее:
-   ```
-   mkdir build
-   cd build
-   ```
-3. Сгенерируйте файлы проекта (например, для Visual Studio 2022 x64):
-   ```
-   cmake .. -G "Visual Studio 17 2022" -A x64
-   ```
-4. Скомпилируйте проект:
-   ```
-   cmake --build . --config Release
-   ```
-   DLL-файл (`SpectrogramContextMenu.dll`) будет находиться в папке `build\Release`.
-
-## Установка
-
-После успешной компиляции:
-
-1. **Откройте командную строку от имени Администратора**
-2. Перейдите в папку с скомпилированной DLL
-3. Зарегистрируйте DLL:
-   ```
-   regsvr32 SpectrogramContextMenu.dll
-   ```
-4. Должно появиться сообщение об успешной регистрации
-
-## Использование
-
-1. Найдите любой аудиофайл в Проводнике Windows
-2. Кликните правой кнопкой мыши на файле
-3. В контекстном меню выберите **"Показать спектрограмму"**
-4. Подождите несколько секунд (зависит от размера файла)
-5. Спектрограмма откроется в стандартном просмотрщике изображений Windows
-
-## Удаление
-
-1. **Откройте командную строку от имени Администратора**
-2. Перейдите в папку с DLL
-3. Отмените регистрацию:
-   ```
-   regsvr32 /u SpectrogramContextMenu.dll
-   ```
-
-## Структура проекта
-
-```
-SpectrogramContextMenu.h    - Заголовочный файл с объявлениями классов
-SpectrogramContextMenu.cpp  - Реализация Shell Extension
-Register.cpp                - Функции регистрации/удаления COM сервера
-SpectrogramContextMenu.def  - Файл экспорта функций DLL
-build.bat                   - Скрипт компиляции для Visual Studio
-README.md                   - Этот файл
+```bat
+where ffmpeg.exe
+where ffprobe.exe
 ```
 
-## Технические детали
+Both commands must print a full path. If you recently changed `PATH`, sign out
+of Windows and sign back in so File Explorer receives the updated environment.
 
-### Архитектура
+## Installation
 
-Проект реализует COM интерфейсы для создания Shell Extension:
-- **IShellExtInit** - инициализация расширения и получение выбранных файлов
-- **IContextMenu** - добавление пункта в контекстное меню и обработка команд
-- **IClassFactory** - фабрика для создания экземпляров COM объектов
+1. Download `SpectrogramContextMenu.exe` from the
+   [latest release](https://github.com/AsSergjo/specshell/releases/latest).
+2. Run the downloaded executable.
+3. Right-click a supported audio file and choose **Show spectrogram**.
 
-### Процесс работы
+The app installs itself to:
 
-1. Windows Explorer вызывает `IShellExtInit::Initialize()` при клике правой кнопкой
-2. Расширение проверяет, является ли файл аудио по расширению
-3. `IContextMenu::QueryContextMenu()` добавляет пункт "Показать спектрограмму"
-4. При выборе пункта вызывается `IContextMenu::InvokeCommand()`
-5. Запускается FFmpeg с параметрами для генерации спектрограммы:
-   ```
-   ffmpeg -i "input.flac" -lavfi "showspectrumpic=s=1024x720:mode=combined:color=fire:scale=log" "spec.png"
-   ```
-6. Созданное изображение открывается через `ShellExecuteW()`
-
-### Параметры спектрограммы
-
-- **Размер**: 1024x720 пикселей
-- **Режим**: combined (вертикальная ориентация)
-- **Цветовая схема**: fire
-- **Шкала**: логарифмическая (log)
-- **Выходной файл**: `%TEMP%\spec.png`
-
-### Регистрация в реестре
-
-DLL регистрируется для каждого поддерживаемого расширения в:
-```
-HKEY_CLASSES_ROOT\.mp3\shellex\ContextMenuHandlers\SpectrogramMenu
-HKEY_CLASSES_ROOT\.flac\shellex\ContextMenuHandlers\SpectrogramMenu
-...
+```text
+%LocalAppData%\Programs\SpectrogramContextMenu
 ```
 
-## Решение проблем
+It registers only under `HKEY_CURRENT_USER`, so UAC elevation is not required.
+On Windows 11, the command is located under **Show more options** because this
+release uses a safe static shell verb instead of an in-process Explorer DLL.
 
-### "FFmpeg не найден"
-- Убедитесь, что FFmpeg установлен
-- Добавьте путь к ffmpeg.exe в системную переменную PATH
-- Или поместите ffmpeg.exe в одну из стандартных директорий
+## Maintenance
 
-### "Не удалось создать спектрограмму"
-- Проверьте, что файл не поврежден
-- Убедитесь, что формат поддерживается FFmpeg
-- Проверьте права доступа к временной папке
+Running a newer downloaded EXE installs the update over the existing version.
+The following command-line modes are also available:
 
-### Пункт меню не появляется
-- Убедитесь, что DLL зарегистрирована (от имени администратора)
-- Перезапустите Explorer.exe:
-  ```
-  taskkill /f /im explorer.exe
-  start explorer.exe
-  ```
-- Проверьте, что файл имеет поддерживаемое расширение
+```bat
+SpectrogramContextMenu.exe /repair
+SpectrogramContextMenu.exe /uninstall
+```
 
-### Ошибки компиляции
-- Убедитесь, что используете Developer Command Prompt для Visual Studio
-- Проверьте наличие Windows SDK
+You can also uninstall the utility from Windows **Installed apps**.
 
-## Безопасность
+## Build
 
-- DLL работает в контексте процесса Explorer.exe
-- Используется минимальный набор привилегий
-- Временные файлы создаются в системной временной папке
-- FFmpeg запускается как отдельный процесс с ограниченным временем ожидания
+Open **x64 Native Tools Command Prompt for VS 2022**, change to the repository
+directory, and run:
 
-## Лицензия
+```bat
+build.bat
+```
 
-Этот проект лицензирован на условиях лицензии MIT - см. файл [LICENSE](LICENSE) для получения подробной информации.
+The resulting `SpectrogramContextMenu.exe` is created in the repository root.
 
-## Автор
+Alternatively, use CMake:
 
-Создано с использованием чистого WinAPI для максимальной производительности и минимальных зависимостей.
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+```
+
+The CMake output is `build\Release\SpectrogramContextMenu.exe`.
+
+## How it works
+
+The executable serves as both installer and runtime application. Installation
+copies it into the current user's profile and creates static shell verbs under
+`HKCU\Software\Classes\SystemFileAssociations`. Selecting the command starts
+the installed EXE with the audio file path. FFmpeg creates `%TEMP%\spec.png`,
+then GDI+ adds labels and metadata before the image is opened.
+
+No code is injected into `explorer.exe`.
+
+## License
+
+Licensed under the [MIT License](LICENSE).

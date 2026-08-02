@@ -1,94 +1,13 @@
 #pragma once
 
-#include <windows.h>
-#include <shlobj.h>
-#include <shlwapi.h>
 #include <string>
-#include <vector>
 
-#pragma comment(lib, "shlwapi.lib")
-
-// GUID для нашего расширения
-// {B5E2A3D1-9C4F-4E7A-8B3D-1F2E3C4D5A6B}
-static const GUID CLSID_SpectrogramContextMenu =
-{ 0xb5e2a3d1, 0x9c4f, 0x4e7a, { 0x8b, 0x3d, 0x1f, 0x2e, 0x3c, 0x4d, 0x5a, 0x6b } };
-
-// Параметры генерации спектрограммы
 constexpr int SPECTROGRAM_WIDTH = 1280;
 constexpr int SPECTROGRAM_HEIGHT = 720;
 constexpr const wchar_t* SPECTROGRAM_COLOR = L"intensity";
 constexpr const wchar_t* SPECTROGRAM_MODE = L"combined";
 constexpr const wchar_t* SPECTROGRAM_SCALE = L"log";
 constexpr const wchar_t* SPECTROGRAM_UNSHARP = L"5:5:0.8:5:5:0.0";
-constexpr DWORD FFMPEG_TIMEOUT = 30000;
-constexpr const wchar_t* SPECTROGRAM_FILENAME = L"spec.png";
+constexpr unsigned long FFMPEG_TIMEOUT_MS = 30000;
 
-/*// Размер — широкоформатный, как в spek
-const int    SPECTROGRAM_WIDTH    = 1500;
-const int    SPECTROGRAM_HEIGHT   = 512;
-
-// mode=combined — каналы смешиваются в один
-const wchar_t* SPECTROGRAM_MODE   = L"combined";
-
-// intensity: чёрный→синий→фиолетовый→красный→жёлтый→белый
-// Точно соответствует цветовой гамме на изображении
-const wchar_t* SPECTROGRAM_COLOR  = L"intensity";
-
-// log — логарифмическая шкала амплитуды (dB), частотная ось линейная
-const wchar_t* SPECTROGRAM_SCALE  лог= L"log";
-
-// Лёгкое повышение резкости, не искажает картину
-const wchar_t* SPECTROGRAM_UNSHARP = L"5:5:0.8:5:5:0.0";*/
-
-class SpectrogramContextMenu : public IShellExtInit, public IContextMenu
-{
-public:
-    SpectrogramContextMenu();
-    
-    // IUnknown
-    STDMETHODIMP QueryInterface(REFIID riid, void **ppvObject);
-    STDMETHODIMP_(ULONG) AddRef();
-    STDMETHODIMP_(ULONG) Release();
-
-    // IShellExtInit
-    STDMETHODIMP Initialize(LPCITEMIDLIST pidlFolder, LPDATAOBJECT pDataObj, HKEY hKeyProgID);
-
-    // IContextMenu
-    STDMETHODIMP QueryContextMenu(HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags);
-    STDMETHODIMP InvokeCommand(LPCMINVOKECOMMANDINFO pici);
-    STDMETHODIMP GetCommandString(UINT_PTR idCmd, UINT uFlags, UINT *pwReserved, LPSTR pszName, UINT cchMax);
-
-protected:
-    ~SpectrogramContextMenu();
-
-private:
-    LONG m_cRef;
-    std::vector<std::wstring> m_selectedFiles;
-    
-    bool IsAudioFile(const std::wstring& filename);
-    void GenerateAndShowSpectrogram(const std::wstring& audioFile);
-    std::wstring GetTempPath();
-    bool FindFFmpeg(std::wstring& ffmpegPath);
-    void ShowImage(const std::wstring& imagePath);
-};
-
-class ClassFactory : public IClassFactory
-{
-public:
-    ClassFactory();
-    
-    // IUnknown
-    STDMETHODIMP QueryInterface(REFIID riid, void **ppvObject);
-    STDMETHODIMP_(ULONG) AddRef();
-    STDMETHODIMP_(ULONG) Release();
-
-    // IClassFactory
-    STDMETHODIMP CreateInstance(IUnknown *pUnkOuter, REFIID riid, void **ppvObject);
-    STDMETHODIMP LockServer(BOOL fLock);
-
-protected:
-    ~ClassFactory();
-
-private:
-    LONG m_cRef;
-};
+bool GenerateAndShowSpectrogram(const std::wstring& audioFile);

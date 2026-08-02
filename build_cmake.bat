@@ -9,7 +9,7 @@ REM Создаем папку build, если её нет
 if not exist build mkdir build
 
 REM Конфигурация CMake с генератором Visual Studio 2022
-cmake -S . -B build -G "Visual Studio 17 2022"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 
 REM Сборка в конфигурации Release
 cmake --build build --config Release
